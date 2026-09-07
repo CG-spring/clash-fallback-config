@@ -1,113 +1,140 @@
-# Clash Fallback Configuration Guide
+# Clash 故障转移配置指南
 
 [![License](https://img.shields.io/badge/license-CC%20BY--NC--SA%204.0-blue.svg)](LICENSE)
 [![Stars](https://img.shields.io/github/stars/CG-spring/clash-fallback-config?style=flat-square)](https://github.com/CG-spring/clash-fallback-config/stargazers)
 
-> Complete guide for Clash proxy group configuration - failover, load balancing, and high availability
+> 完整 Clash 代理组配置教程——故障转移（Failover）、负载均衡（Load Balance）与高可用（High Availability）
 
-**English** | [Chinese](README_ZH.md)
-
----
-
-## Table of Contents
-
-- [What is Failover](#what-is-failover)
-- [Proxy Group Types](#proxy-group-types)
-- [Failover Configuration](#failover-configuration)
-- [Load Balancing](#load-balancing)
-- [Health Check](#health-check)
-- [Best Practices](#best-practices)
+**中文** | **[English](README_EN.md)**
 
 ---
 
-## What is Failover
+## 目录
 
-Failover means when the primary node becomes unavailable, the system automatically switches to a backup node. In Clash, this is achieved through `proxy-groups`:
+- [什么是故障转移](#什么是故障转移)
+- [代理组类型](#代理组类型)
+- [故障转移配置](#故障转移配置)
+- [负载均衡](#负载均衡)
+- [健康检查](#健康检查)
+- [最佳实践](#最佳实践)
+- [相关资源](#相关资源)
+- [许可证](#许可证)
+
+---
+
+## 什么是故障转移
+
+故障转移（Failover）是指当主节点不可用时，系统自动切换到备用节点，从而保证连接不中断。在 Clash 中，这一能力完全通过 `proxy-groups`（代理组）实现：
 
 ```
-Primary Node (low latency)
-    FAILURE DETECTED
-Backup 1 -> Backup 2 -> Backup 3
-    ALL FAILED
+主节点（低延迟）
+    │  检测到故障
+    ▼
+备用 1  →  备用 2  →  备用 3
+    │  全部失败
+    ▼
 DIRECT / REJECT
 ```
 
-**Benefits:**
-- Improved connection stability
-- No manual switching
-- Automatic optimal node selection
+**核心价值：**
+
+- 提升连接稳定性，节点掉线时无需手动切换
+- 自动选择当前最优节点，减少卡顿
+- 配合规则可分场景使用不同策略（流媒体、下载、聊天）
+
+Clash 的 `fallback` 类型代理组正是为此设计：它按列表顺序从上到下尝试，只要当前节点可用就一直使用，一旦失败立刻切到下一个，直到列表末尾。
 
 ---
 
-## Proxy Group Types
+## 代理组类型
 
-### 1. select - Manual Selection
+Clash（含 mihomo / Clash.Meta）提供多种代理组类型，理解它们的差异是写好配置的基础。
+
+### 1. select —— 手动选择
+
+最基础的代理组，用户在下拉菜单里手动挑选节点。
 
 ```yaml
 proxy-groups:
-  - name: "Manual"
+  - name: "手动选择"
     type: select
     proxies:
-      - HongKong-01
-      - HongKong-02
-      - Japan-01
-      - Auto-Select
+      - 香港-01
+      - 香港-02
+      - 日本-01
+      - 自动选择
       - DIRECT
 ```
 
-### 2. url-test - Auto Speed Test
+适用场景：需要精确控制走哪条线路时（如某些站点对特定地区节点更友好）。
+
+### 2. url-test —— 自动测速
+
+每隔一段时间对所有节点发起探测，自动选用延迟最低的一个。
 
 ```yaml
 proxy-groups:
-  - name: "Auto-Select"
+  - name: "自动选择"
     type: url-test
     url: http://www.gstatic.com/generate_204
-    interval: 300    # Test every 300 seconds
-    tolerance: 50    # Switch if latency diff > 50ms
+    interval: 300        # 每 300 秒测一次
+    tolerance: 50        # 延迟差超过 50ms 才切换
     proxies:
-      - HongKong-01
-      - HongKong-02
-      - Japan-01
+      - 香港-01
+      - 香港-02
+      - 日本-01
 ```
 
-### 3. fallback - Failover
+适用场景：日常浏览、对延迟敏感的应用（Telegram、游戏加速）。
+
+### 3. fallback —— 故障转移
+
+按顺序优先使用排在前面的节点，失败则顺延。
 
 ```yaml
 proxy-groups:
-  - name: "Failover"
+  - name: "故障转移"
     type: fallback
     url: http://www.gstatic.com/generate_204
     interval: 300
     proxies:
-      - HongKong-01     # Priority: use first
-      - HongKong-02     # Switch to if 1 fails
-      - Japan-01        # Switch to if 2 fails
-      - DIRECT          # Direct when all fail
+      - 香港-01         # 优先使用
+      - 香港-02         # 香港-01 失败时使用
+      - 日本-01         # 再失败时使用
+      - DIRECT          # 全部失败则直连
 ```
 
-### 4. load-balance - Load Balancing
+适用场景：稳定性优先的场景（视频通话、直播推流、长时间下载）。
+
+### 4. load-balance —— 负载均衡
+
+在多个节点之间分配流量，支持轮询（round-robin）与一致性哈希（consistent-hashing）。
 
 ```yaml
 proxy-groups:
-  - name: "Load-Balance"
+  - name: "负载均衡"
     type: load-balance
     url: http://www.gstatic.com/generate_204
     interval: 300
-    strategy: round-robin   # or consistent-hashing
+    strategy: round-robin      # 或 consistent-hashing
     proxies:
-      - Node-01
-      - Node-02
-      - Node-03
+      - 节点-01
+      - 节点-02
+      - 节点-03
 ```
+
+适用场景：大流量下载、需要分散单一节点压力的场合。
 
 ---
 
-## Failover Configuration
+## 故障转移配置
 
-### Basic Configuration Template
+### 基础配置模板
+
+下面是一个可直接套用的完整结构，先定义节点，再用嵌套代理组实现「区域优选 + 全局兜底」。
 
 ```yaml
-# Clash configuration file
+# Clash 配置文件
 proxies:
   - name: "HK-01"
     type: ss
@@ -131,20 +158,20 @@ proxies:
     password: "password"
 
 proxy-groups:
-  # Main group - Failover
+  # 主组——故障转移
   - name: "PROXY"
     type: fallback
     url: http://www.gstatic.com/generate_204
     interval: 180
     lazy: true
     proxies:
-      - HK-Optimal
-      - JP-Optimal
-      - BACKUP
+      - HK-最优
+      - JP-最优
+      - 备用
       - DIRECT
 
-  # HK group - url-test
-  - name: "HK-Optimal"
+  # 香港组——url-test
+  - name: "HK-最优"
     type: url-test
     url: http://www.gstatic.com/generate_204
     interval: 180
@@ -153,8 +180,8 @@ proxy-groups:
       - HK-01
       - HK-02
 
-  # JP group - url-test
-  - name: "JP-Optimal"
+  # 日本组——url-test
+  - name: "JP-最优"
     type: url-test
     url: http://www.gstatic.com/generate_204
     interval: 180
@@ -162,8 +189,8 @@ proxy-groups:
     proxies:
       - JP-01
 
-  # Backup group - fallback
-  - name: "BACKUP"
+  # 备用组——fallback
+  - name: "备用"
     type: fallback
     url: http://www.gstatic.com/generate_204
     interval: 300
@@ -176,12 +203,14 @@ rules:
   - MATCH,PROXY
 ```
 
-### Multi-Layer Failover
+### 多层故障转移
+
+当节点较多时，可以用「区域 → 大区 → 全局」三层结构，既保证速度又保证兜底：
 
 ```yaml
 proxy-groups:
-  # Layer 1: By region
-  - name: "HK-Selected"
+  # 第一层：按地区优选
+  - name: "HK-优选"
     type: url-test
     url: http://www.gstatic.com/generate_204
     interval: 120
@@ -191,7 +220,7 @@ proxy-groups:
       - HK-02
       - HK-03
 
-  - name: "JP-Selected"
+  - name: "JP-优选"
     type: url-test
     url: http://www.gstatic.com/generate_204
     interval: 120
@@ -200,95 +229,99 @@ proxy-groups:
       - JP-01
       - JP-02
 
-  # Layer 2: Regional failover
-  - name: "Asia"
+  # 第二层：地区间故障转移
+  - name: "亚洲"
     type: fallback
     url: http://www.gstatic.com/generate_204
     interval: 180
     proxies:
-      - HK-Selected
-      - JP-Selected
+      - HK-优选
+      - JP-优选
 
-  # Layer 3: Global failover
+  # 第三层：全球故障转移
   - name: "PROXY"
     type: fallback
     url: http://www.gstatic.com/generate_204
     interval: 180
     proxies:
-      - Asia
-      - US
-      - EU
+      - 亚洲
+      - 美国
+      - 欧洲
       - DIRECT
 ```
 
 ---
 
-## Load Balancing
+## 负载均衡
 
-### Round-Robin Mode
+### 轮询模式（round-robin）
 
 ```yaml
 proxy-groups:
-  - name: "RoundRobin"
+  - name: "轮询"
     type: load-balance
     url: http://www.gstatic.com/generate_204
     interval: 180
     strategy: round-robin
     proxies:
-      - Node-01
-      - Node-02
-      - Node-03
+      - 节点-01
+      - 节点-02
+      - 节点-03
 ```
 
-**Use case:** High traffic scenarios, distributes load evenly.
+**适用：** 高流量场景，把请求均匀分散到各节点，避免单点限速。
 
-### Consistent-Hashing Mode
+### 一致性哈希模式（consistent-hashing）
 
 ```yaml
 proxy-groups:
-  - name: "ConsistentHash"
+  - name: "一致性哈希"
     type: load-balance
     url: http://www.gstatic.com/generate_204
     interval: 180
     strategy: consistent-hashing
     proxies:
-      - Node-01
-      - Node-02
-      - Node-03
+      - 节点-01
+      - 节点-02
+      - 节点-03
 ```
 
-**Use case:** Session persistence, same target always uses same node.
+**适用：** 需要会话保持的场景（同一目标始终走同一节点），例如登录态、长连接。
 
 ---
 
-## Health Check
+## 健康检查
 
-### Test URL Recommendations
+代理组能否正确切换，取决于健康检查参数是否合理。
+
+### 探测 URL 推荐
 
 ```yaml
 url-test / fallback / load-balance:
   url: http://www.gstatic.com/generate_204
-  # or
+  # 或
   url: http://cp.cloudflare.com/generate_204
-  # or
+  # 或
   url: https://connect.rom.miui.com/generate_204
 ```
 
-### Parameters Explained
+> 提示：优先选用返回 204、体积小、延迟低的地址，避免把探测请求打到自身业务域名。
 
-| Parameter | Description | Recommended |
-|-----------|-------------|-------------|
-| interval | Test interval | 120-300 seconds |
-| tolerance | Latency difference | 30-50ms |
-| lazy | Only test when active | true |
-| timeout | Request timeout | 5000ms |
-| max-fails | Consecutive failures | 3 |
+### 参数说明
 
-### Advanced Health Check
+| 参数 | 含义 | 推荐值 |
+|------|------|--------|
+| interval | 探测间隔 | 120–300 秒 |
+| tolerance | 延迟容忍差 | 30–50ms |
+| lazy | 仅在使用时探测 | true |
+| timeout | 请求超时 | 5000ms |
+| max-fails | 连续失败次数 | 3 |
+
+### 进阶健康检查
 
 ```yaml
 proxy-groups:
-  - name: "Smart-Select"
+  - name: "智能选择"
     type: url-test
     url: http://www.gstatic.com/generate_204
     interval: 180
@@ -297,19 +330,19 @@ proxy-groups:
     timeout: 5000
     max-fails: 3
     proxies:
-      - Node-01
-      - Node-02
+      - 节点-01
+      - 节点-02
 ```
 
 ---
 
-## Best Practices
+## 最佳实践
 
-### 1. Different Strategies for Different Use Cases
+### 1. 不同场景用不同策略
 
 ```yaml
 proxy-groups:
-  # Streaming - Failover
+  # 流媒体——故障转移，保证不中断
   - name: "Netflix"
     type: fallback
     url: http://www.gstatic.com/generate_204
@@ -319,7 +352,7 @@ proxy-groups:
       - Netflix-02
       - PROXY
 
-  # Chat - Low Latency
+  # 聊天——低延迟优先
   - name: "Telegram"
     type: url-test
     url: http://www.gstatic.com/generate_204
@@ -330,59 +363,61 @@ proxy-groups:
       - HK-02
       - JP-01
 
-  # Downloads - Load Balance
-  - name: "Download"
+  # 下载——负载均衡
+  - name: "下载"
     type: load-balance
     url: http://www.gstatic.com/generate_204
     interval: 300
     strategy: round-robin
     proxies:
-      - Bulk-01
-      - Bulk-02
+      - 大流量-01
+      - 大流量-02
 ```
 
-### 2. Avoid Frequent Switching
+### 2. 避免频繁切换
+
+把 `interval` 设大、`tolerance` 设高，可以减少抖动带来的反复跳变：
 
 ```yaml
 proxy-groups:
-  - name: "Stable-Select"
+  - name: "稳定选择"
     type: url-test
     url: http://www.gstatic.com/generate_204
-    interval: 300      # Test every 5 minutes
-    tolerance: 100    # 100ms difference before switching
-    lazy: true        # Only test when requests active
+    interval: 300      # 每 5 分钟测一次
+    tolerance: 100    # 差 100ms 才切换
+    lazy: true        # 仅活跃时探测
     proxies:
-      - Node-List
+      - 节点列表
 ```
 
-### 3. Use with Rules
+### 3. 与规则配合使用
 
 ```yaml
 rules:
-  # Streaming services
+  # 流媒体
   - DOMAIN-SUFFIX,netflix.com,Netflix
   - DOMAIN-SUFFIX,disneyplus.com,Disney
   - DOMAIN-SUFFIX,hulu.com,Hulu
 
-  # Chat apps - low latency
+  # 聊天——低延迟
   - DOMAIN-SUFFIX,telegram.org,Telegram
   - DOMAIN-SUFFIX,t.me,Telegram
 
-  # Default
+  # 默认
   - MATCH,PROXY
 ```
 
 ---
 
-## Related Resources
+## 相关资源
 
-- [Airport Navigation](https://nav.clashvip.net) - VPN recommendations
-- [Clash Tutorial](https://clash-for-windows.net) - Client download
-- [Community](https://bbs.clashhub.net) - Technical discussions
-- [ClashVIP](https://clashvip.net) - Subscription service
+- [机场导航](https://nav.clashvip.net) - VPN 节点推荐
+- [Clash 教程](https://clash-for-windows.net) - 客户端下载
+- [社区论坛](https://bbs.clashhub.net) - 技术讨论
+- [ClashVIP](https://clashvip.net) - 订阅服务
 
 ---
 
-## License
+## 许可证
 
-CC BY-NC-SA 4.0 - Educational use only, no commercial use
+CC BY-NC-SA 4.0 - 仅限教育用途，禁止商用
